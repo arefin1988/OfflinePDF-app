@@ -1,0 +1,5 @@
+{
+  "name": "Offline PDF",
+  "description": "A powerful, privacy-focused offline PDF utility for merging, splitting, locking, and editing PDFs entirely in your browser.",
+  "requestFramePermissions": []
+}
