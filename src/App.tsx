@@ -170,7 +170,21 @@ const TOOLS: Tool[] = [
   { id: 'viewer', name: 'PDF Viewer', description: 'Read and view your PDF files', icon: FileSearch, color: 'bg-teal-500' },
 ];
 
-function PDFPageGrid({ file, onRotatePage, rotations = {} }: { file: File, onRotatePage?: (index: number) => void, rotations?: Record<number, number> }) {
+function PDFPageGrid({ 
+  file, 
+  onRotatePage, 
+  rotations = {}, 
+  selectedPages = [], 
+  onTogglePage,
+  columns = 3
+}: { 
+  file: File, 
+  onRotatePage?: (index: number) => void, 
+  rotations?: Record<number, number>,
+  selectedPages?: number[],
+  onTogglePage?: (index: number) => void,
+  columns?: number
+}) {
   const [pages, setPages] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -213,8 +227,8 @@ function PDFPageGrid({ file, onRotatePage, rotations = {} }: { file: File, onRot
 
   if (loading) {
     return (
-      <div className="grid grid-cols-3 gap-2">
-        {[1, 2, 3].map(i => (
+      <div className={cn("grid gap-2", columns === 2 ? "grid-cols-2" : columns === 4 ? "grid-cols-4" : "grid-cols-3")}>
+        {[1, 2, 3, 4].map(i => (
           <div key={i} className="aspect-[3/4] bg-zinc-100 animate-pulse rounded-lg" />
         ))}
       </div>
@@ -222,30 +236,50 @@ function PDFPageGrid({ file, onRotatePage, rotations = {} }: { file: File, onRot
   }
 
   return (
-    <div className="grid grid-cols-3 gap-3">
-      {pages.map((url, i) => (
-        <div key={i} className="relative group">
-          <div className="aspect-[3/4] bg-white border border-zinc-200 rounded-lg overflow-hidden shadow-sm relative">
-            <img 
-              src={url} 
-              alt={`Page ${i + 1}`} 
-              className="w-full h-full object-contain transition-transform duration-300"
-              style={{ transform: `rotate(${rotations[i] || 0}deg)` }}
-            />
-            <div className="absolute bottom-1 right-1 bg-black/50 text-white text-[8px] px-1 rounded font-mono">
-              {i + 1}
-            </div>
-          </div>
-          {onRotatePage && (
-            <button 
-              onClick={() => onRotatePage(i)}
-              className="absolute -top-1 -right-1 w-6 h-6 bg-white border border-zinc-200 rounded-full flex items-center justify-center shadow-sm text-zinc-600 hover:text-red-500 transition-colors z-10"
+    <div className={cn("grid gap-3", columns === 2 ? "grid-cols-2" : columns === 4 ? "grid-cols-4" : "grid-cols-3")}>
+      {pages.map((url, i) => {
+        const isSelected = selectedPages.includes(i);
+        return (
+          <div key={i} className="relative group">
+            <div 
+              onClick={() => onTogglePage?.(i)}
+              className={cn(
+                "aspect-[3/4] bg-white border rounded-lg overflow-hidden shadow-sm relative cursor-pointer transition-all duration-200",
+                isSelected ? "border-red-500 ring-2 ring-red-500/20 scale-[0.98]" : "border-zinc-200 hover:border-zinc-300"
+              )}
             >
-              <RotateCw size={12} />
-            </button>
-          )}
-        </div>
-      ))}
+              <img 
+                src={url} 
+                alt={`Page ${i + 1}`} 
+                className="w-full h-full object-contain transition-transform duration-300"
+                style={{ transform: `rotate(${rotations[i] || 0}deg)` }}
+              />
+              <div className={cn(
+                "absolute bottom-1 right-1 text-[8px] px-1 rounded font-mono transition-colors",
+                isSelected ? "bg-red-500 text-white" : "bg-black/50 text-white"
+              )}>
+                {i + 1}
+              </div>
+              {isSelected && (
+                <div className="absolute top-1 left-1 bg-red-500 text-white rounded-full p-0.5 shadow-sm">
+                  <ShieldCheck size={10} />
+                </div>
+              )}
+            </div>
+            {onRotatePage && (
+              <button 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRotatePage(i);
+                }}
+                className="absolute -top-1 -right-1 w-6 h-6 bg-white border border-zinc-200 rounded-full flex items-center justify-center shadow-sm text-zinc-600 hover:text-red-500 transition-colors z-10"
+              >
+                <RotateCw size={12} />
+              </button>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -663,9 +697,26 @@ export default function App() {
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold text-zinc-400 uppercase">Page Preview</label>
-              <div className="max-h-60 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
-                <PDFPageGrid file={files[0]} />
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages</label>
+                <span className="text-[10px] text-zinc-400">Click pages to select</span>
+              </div>
+              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+                <PDFPageGrid 
+                  file={files[0]} 
+                  selectedPages={toolParams.selectedPages || []}
+                  onTogglePage={(index) => {
+                    const selected = [...(toolParams.selectedPages || [])];
+                    const idx = selected.indexOf(index);
+                    if (idx > -1) selected.splice(idx, 1);
+                    else selected.push(index);
+                    
+                    // Update range input based on selection
+                    const sorted = [...selected].sort((a, b) => a - b);
+                    const rangeStr = sorted.map(i => i + 1).join(', ');
+                    setToolParams({ ...toolParams, selectedPages: selected, range: rangeStr });
+                  }}
+                />
               </div>
             </div>
           </div>
@@ -781,15 +832,76 @@ export default function App() {
         );
       case 'delete':
         return (
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-zinc-400 uppercase">Pages to Delete (e.g. 1, 3, 5)</label>
-            <input 
-              type="text" 
-              placeholder="2, 4" 
-              className="w-full p-3 bg-white border border-zinc-200 rounded-xl text-sm"
-              value={toolParams.pagesToDelete || ''}
-              onChange={(e) => setToolParams({ ...toolParams, pagesToDelete: e.target.value })}
-            />
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Pages to Delete</label>
+              <input 
+                type="text" 
+                placeholder="2, 4" 
+                className="w-full p-3 bg-white border border-zinc-200 rounded-xl text-sm"
+                value={toolParams.pagesToDelete || ''}
+                onChange={(e) => setToolParams({ ...toolParams, pagesToDelete: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages to Remove</label>
+              </div>
+              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+                <PDFPageGrid 
+                  file={files[0]} 
+                  columns={4}
+                  selectedPages={toolParams.selectedPages || []}
+                  onTogglePage={(index) => {
+                    const selected = [...(toolParams.selectedPages || [])];
+                    const idx = selected.indexOf(index);
+                    if (idx > -1) selected.splice(idx, 1);
+                    else selected.push(index);
+                    
+                    const sorted = [...selected].sort((a, b) => a - b);
+                    const rangeStr = sorted.map(i => i + 1).join(', ');
+                    setToolParams({ ...toolParams, selectedPages: selected, pagesToDelete: rangeStr });
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      case 'extract':
+        return (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Pages to Extract</label>
+              <input 
+                type="text" 
+                placeholder="1, 3, 5" 
+                className="w-full p-3 bg-white border border-zinc-200 rounded-xl text-sm"
+                value={toolParams.pagesToExtract || ''}
+                onChange={(e) => setToolParams({ ...toolParams, pagesToExtract: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages to Extract</label>
+              </div>
+              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+                <PDFPageGrid 
+                  file={files[0]} 
+                  columns={4}
+                  selectedPages={toolParams.selectedPages || []}
+                  onTogglePage={(index) => {
+                    const selected = [...(toolParams.selectedPages || [])];
+                    const idx = selected.indexOf(index);
+                    if (idx > -1) selected.splice(idx, 1);
+                    else selected.push(index);
+                    
+                    const sorted = [...selected].sort((a, b) => a - b);
+                    const rangeStr = sorted.map(i => i + 1).join(', ');
+                    setToolParams({ ...toolParams, selectedPages: selected, pagesToExtract: rangeStr });
+                  }}
+                />
+              </div>
+            </div>
           </div>
         );
       case 'metadata':
@@ -813,19 +925,6 @@ export default function App() {
                 onChange={(e) => setToolParams({ ...toolParams, author: e.target.value })}
               />
             </div>
-          </div>
-        );
-      case 'extract':
-        return (
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-zinc-400 uppercase">Pages to Extract (e.g. 1, 3, 5)</label>
-            <input 
-              type="text" 
-              placeholder="1, 2" 
-              className="w-full p-3 bg-white border border-zinc-200 rounded-xl text-sm"
-              value={toolParams.pagesToExtract || ''}
-              onChange={(e) => setToolParams({ ...toolParams, pagesToExtract: e.target.value })}
-            />
           </div>
         );
       case 'lock':
