@@ -244,7 +244,7 @@ function PDFPageGrid({
             <div 
               onClick={() => onTogglePage?.(i)}
               className={cn(
-                "aspect-[3/4] bg-white border rounded-lg overflow-hidden shadow-sm relative cursor-pointer transition-all duration-200",
+                "aspect-[3/4] bg-white border rounded-none overflow-hidden shadow-sm relative cursor-pointer transition-all duration-200",
                 isSelected ? "border-red-500 ring-2 ring-red-500/20 scale-[0.98]" : "border-zinc-200 hover:border-zinc-300"
               )}
             >
@@ -389,8 +389,27 @@ export default function App() {
           });
         }
       }
+      // Reset input value to allow selecting the same file again
+      e.target.value = '';
     }
   };
+
+  // PWA File Handling
+  React.useEffect(() => {
+    if ('launchQueue' in window) {
+      (window as any).launchQueue.setConsumer(async (launchParams: any) => {
+        if (launchParams.files && launchParams.files.length > 0) {
+          const files = [];
+          for (const fileHandle of launchParams.files) {
+            const file = await fileHandle.getFile();
+            files.push(file);
+          }
+          setFiles(files);
+          setActiveTool('viewer');
+        }
+      });
+    }
+  }, []);
 
   const reset = () => {
     setActiveTool(null);
@@ -701,7 +720,7 @@ export default function App() {
                 <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages</label>
                 <span className="text-[10px] text-zinc-400">Click pages to select</span>
               </div>
-              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
                 <PDFPageGrid 
                   file={files[0]} 
                   selectedPages={toolParams.selectedPages || []}
@@ -804,7 +823,7 @@ export default function App() {
                 <RotateCw size={14} /> Rotate All
               </button>
             </div>
-            <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+            <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
               <PDFPageGrid 
                 file={files[0]} 
                 rotations={toolParams.rotations || {}}
@@ -847,7 +866,7 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages to Remove</label>
               </div>
-              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
                 <PDFPageGrid 
                   file={files[0]} 
                   columns={4}
@@ -884,7 +903,7 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages to Extract</label>
               </div>
-              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-xl">
+              <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
                 <PDFPageGrid 
                   file={files[0]} 
                   columns={4}
@@ -1015,20 +1034,21 @@ export default function App() {
               </div>
 
               {/* File Upload Area / Live Preview */}
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileChange} 
+                className="hidden" 
+                multiple={activeTool === 'merge' || activeTool === 'images-to-pdf'}
+                accept={activeTool === 'images-to-pdf' ? "image/*" : "application/pdf"}
+              />
+
               {!resultUrl && (
                 files.length === 0 ? (
                   <div 
                     onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-zinc-200 rounded-3xl p-10 flex flex-col items-center justify-center gap-4 bg-white hover:border-red-400 hover:bg-red-50/30 transition-all cursor-pointer group"
+                    className="border-2 border-dashed border-zinc-200 rounded-none p-10 flex flex-col items-center justify-center gap-4 bg-white hover:border-red-400 hover:bg-red-50/30 transition-all cursor-pointer group"
                   >
-                    <input 
-                      type="file" 
-                      ref={fileInputRef} 
-                      onChange={handleFileChange} 
-                      className="hidden" 
-                      multiple={activeTool === 'merge' || activeTool === 'images-to-pdf'}
-                      accept={activeTool === 'images-to-pdf' ? "image/*" : "application/pdf"}
-                    />
                     <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center text-zinc-400 group-hover:bg-red-100 group-hover:text-red-500 transition-colors">
                       <FilePlus size={32} />
                     </div>
@@ -1049,10 +1069,10 @@ export default function App() {
                         Change File
                       </button>
                     </div>
-                    <div className="relative aspect-[3/4] w-full bg-zinc-200 rounded-3xl overflow-hidden border border-zinc-200 shadow-inner group">
+                    <div className="relative aspect-[3/4] w-full bg-zinc-200 rounded-none overflow-hidden border border-zinc-200 shadow-inner group">
                       {livePreviewUrl ? (
                         <iframe 
-                          src={`${livePreviewUrl}#toolbar=0&navpanes=0&scrollbar=0`} 
+                          src={`${livePreviewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`} 
                           className="w-full h-full border-none"
                           title="Live Preview"
                         />
