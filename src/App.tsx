@@ -289,6 +289,83 @@ function PDFPageGrid({
   );
 }
 
+function PDFPreview({ url, isGenerating }: { url: string | null, isGenerating: boolean }) {
+  const [pages, setPages] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  React.useEffect(() => {
+    if (!url) {
+      setPages([]);
+      return;
+    }
+
+    let isMounted = true;
+    const loadPreview = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(url);
+        const bytes = await response.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(bytes).promise;
+        const pageUrls: string[] = [];
+        
+        // Render only first 3 pages for preview to keep it fast
+        const pagesToRender = Math.min(pdf.numPages, 3);
+        for (let i = 1; i <= pagesToRender; i++) {
+          const page = await pdf.getPage(i);
+          const viewport = page.getViewport({ scale: 0.8 });
+          const canvas = document.createElement('canvas');
+          const context = canvas.getContext('2d');
+          if (!context) continue;
+          
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+          
+          await page.render({ canvasContext: context, viewport, canvas }).promise;
+          pageUrls.push(canvas.toDataURL());
+        }
+        
+        if (isMounted) {
+          setPages(pageUrls);
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Error rendering preview:', err);
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    loadPreview();
+    return () => { isMounted = false; };
+  }, [url]);
+
+  return (
+    <div className="relative w-full h-full bg-zinc-100 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+      {pages.length > 0 ? (
+        pages.map((src, i) => (
+          <div key={i} className="bg-white shadow-md mx-auto max-w-full">
+            <img src={src} alt={`Page ${i + 1}`} className="w-full h-auto block" />
+          </div>
+        ))
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-zinc-400">
+          <FileSearch size={48} className="animate-pulse" />
+        </div>
+      )}
+
+      {(loading || isGenerating) && (
+        <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex items-center justify-center z-10">
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-8 h-8 border-4 border-red-600/20 border-t-red-600 rounded-full animate-spin" />
+            <span className="text-[10px] font-bold text-red-600 uppercase tracking-widest">
+              {isGenerating ? 'Updating Preview' : 'Rendering'}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const [currentTab, setCurrentTab] = useState<Tab>('tools');
@@ -1670,26 +1747,7 @@ export default function App() {
                       </button>
                     </div>
                     <div className="relative aspect-[3/4] w-full bg-zinc-200 rounded-none overflow-hidden border border-zinc-200 shadow-inner group">
-                      {livePreviewUrl ? (
-                        <iframe 
-                          src={`${livePreviewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=Fit`} 
-                          className="w-full h-full border-none"
-                          title="Live Preview"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-zinc-400">
-                          <FileSearch size={48} className="animate-pulse" />
-                        </div>
-                      )}
-                      
-                      {isGeneratingPreview && (
-                        <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex items-center justify-center z-10">
-                          <div className="flex flex-col items-center gap-2">
-                            <div className="w-8 h-8 border-4 border-red-600/20 border-t-red-600 rounded-full animate-spin" />
-                            <span className="text-[10px] font-bold text-red-600 uppercase tracking-widest">Updating Preview</span>
-                          </div>
-                        </div>
-                      )}
+                      <PDFPreview url={livePreviewUrl} isGenerating={isGeneratingPreview} />
                     </div>
                   </div>
                 )
@@ -2070,13 +2128,6 @@ export default function App() {
         >
           <Settings size={20} />
           <span className="text-[10px] font-bold">Settings</span>
-        </button>
-        <button 
-          onClick={() => { setCurrentTab('premium'); reset(); }}
-          className={cn("flex flex-col items-center gap-1 transition-colors", currentTab === 'premium' ? "text-amber-500" : "text-zinc-400")}
-        >
-          <Zap size={20} className={currentTab === 'premium' ? "text-amber-600" : "text-amber-500"} />
-          <span className="text-[10px] font-bold">Premium</span>
         </button>
       </nav>
     </div>
