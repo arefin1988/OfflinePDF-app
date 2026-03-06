@@ -34,9 +34,10 @@ import { set, get, keys, del } from 'idb-keyval';
 import JSZip from 'jszip';
 import * as pdfLogic from './lib/pdf';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 // Initialize PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 type Tab = 'tools' | 'files' | 'settings' | 'premium';
 
@@ -143,7 +144,9 @@ type ToolId =
   | 'metadata' 
   | 'viewer'
   | 'sign'
-  | 'fill';
+  | 'fill'
+  | 'reorder'
+  | 'compress';
 
 interface Tool {
   id: ToolId;
@@ -167,6 +170,8 @@ const TOOLS: Tool[] = [
   { id: 'sign', name: 'Sign PDF', description: 'Add your signature to document', icon: PenTool, color: 'bg-sky-500' },
   { id: 'fill', name: 'Fill Form', description: 'Fill out PDF form fields', icon: FilePlus, color: 'bg-lime-500' },
   { id: 'metadata', name: 'Edit Metadata', description: 'Change Title, Author, etc.', icon: Settings, color: 'bg-orange-500' },
+  { id: 'reorder', name: 'Reorder Pages', description: 'Change the order of pages', icon: LayoutGrid, color: 'bg-cyan-500' },
+  { id: 'compress', name: 'Compress PDF', description: 'Reduce PDF file size', icon: Zap, color: 'bg-orange-600' },
   { id: 'viewer', name: 'PDF Viewer', description: 'Read and view your PDF files', icon: FileSearch, color: 'bg-teal-500' },
 ];
 
@@ -469,12 +474,33 @@ export default function App() {
             }
             break;
           case 'watermark':
-            if (toolParams.watermarkText) {
-              result = await pdfLogic.addWatermark(files[0], toolParams.watermarkText);
-            }
+            const previewConfigs = [...(toolParams.wmStack || [])];
+            // Always add current in-progress watermark to preview
+            previewConfigs.push({
+              type: toolParams.wmType || 'text',
+              text: toolParams.watermarkText || 'WATERMARK',
+              fontSize: toolParams.fontSize || 60,
+              color: toolParams.color || '#cc0000',
+              opacity: toolParams.opacity || 0.3,
+              angle: toolParams.angle || 45,
+              scope: toolParams.scope || 'all',
+              logoBytes: toolParams.logoBytes,
+              logoMime: toolParams.logoMime,
+              sizeRatio: toolParams.sizeRatio || 0.25,
+              pos: toolParams.pos || 'center'
+            });
+            result = await pdfLogic.addWatermark(files[0], previewConfigs);
             break;
           case 'numbers':
-            result = await pdfLogic.addPageNumbers(files[0]);
+            result = await pdfLogic.addPageNumbers(files[0], {
+              position: toolParams.pnPos || 'bottom-center',
+              format: toolParams.pnFormat || 'n',
+              startNumber: toolParams.pnStart || 1,
+              fontSize: toolParams.pnFontSize || 11,
+              margin: toolParams.pnMargin || 20,
+              skipFirst: toolParams.pnSkip || 0,
+              color: toolParams.pnColor || '#333333',
+            });
             break;
           case 'metadata':
             result = await pdfLogic.updateMetadata(files[0], {
@@ -486,6 +512,14 @@ export default function App() {
             if (toolParams.signature) {
               result = await pdfLogic.signPDF(files[0], toolParams.signature, 0, 50, 50, 150, 75);
             }
+            break;
+          case 'reorder':
+            if (toolParams.newOrder && toolParams.newOrder.length > 0) {
+              result = await pdfLogic.reorderPages(files[0], toolParams.newOrder);
+            }
+            break;
+          case 'compress':
+            result = await pdfLogic.compressPDF(files[0], toolParams.compLevel || 'medium');
             break;
           // Add other tools as needed for live preview
         }
@@ -527,14 +561,17 @@ export default function App() {
           outputName = 'merged.pdf';
           break;
         case 'split':
-          const splitMode = toolParams.splitMode || 'range';
-          let ranges = toolParams.range || '1';
+          const splitMode = toolParams.splitMode || 'all';
+          let ranges = '';
           
-          if (splitMode === 'every') {
-            // Get page count first
+          if (splitMode === 'all') {
             const bytes = await files[0].arrayBuffer();
             const pdf = await pdfjsLib.getDocument(bytes).promise;
             ranges = Array.from({ length: pdf.numPages }, (_, i) => (i + 1).toString()).join(',');
+          } else if (splitMode === 'range') {
+            ranges = `${toolParams.rangeFrom || 1}-${toolParams.rangeTo || 1}`;
+          } else {
+            ranges = toolParams.customRanges || '1';
           }
           
           const splitResults = await pdfLogic.splitPDF(files[0], ranges);
@@ -577,11 +614,36 @@ export default function App() {
           outputName = 'rotated.pdf';
           break;
         case 'watermark':
-          result = await pdfLogic.addWatermark(files[0], toolParams.watermarkText || 'OFFLINE PDF');
+          const finalConfigs = [...(toolParams.wmStack || [])];
+          // If stack is empty but there's current input, add it
+          if (finalConfigs.length === 0) {
+            finalConfigs.push({
+              type: toolParams.wmType || 'text',
+              text: toolParams.watermarkText || 'WATERMARK',
+              fontSize: toolParams.fontSize || 60,
+              color: toolParams.color || '#cc0000',
+              opacity: toolParams.opacity || 0.3,
+              angle: toolParams.angle || 45,
+              scope: toolParams.scope || 'all',
+              logoBytes: toolParams.logoBytes,
+              logoMime: toolParams.logoMime,
+              sizeRatio: toolParams.sizeRatio || 0.25,
+              pos: toolParams.pos || 'center'
+            });
+          }
+          result = await pdfLogic.addWatermark(files[0], finalConfigs);
           outputName = 'watermarked.pdf';
           break;
         case 'numbers':
-          result = await pdfLogic.addPageNumbers(files[0]);
+          result = await pdfLogic.addPageNumbers(files[0], {
+            position: toolParams.pnPos || 'bottom-center',
+            format: toolParams.pnFormat || 'n',
+            startNumber: toolParams.pnStart || 1,
+            fontSize: toolParams.pnFontSize || 11,
+            margin: toolParams.pnMargin || 20,
+            skipFirst: toolParams.pnSkip || 0,
+            color: toolParams.pnColor || '#333333',
+          });
           outputName = 'numbered.pdf';
           break;
         case 'delete':
@@ -609,6 +671,19 @@ export default function App() {
           }
           result = await pdfLogic.signPDF(files[0], toolParams.signature, 0, 50, 50, 150, 75);
           outputName = 'signed.pdf';
+          break;
+        case 'reorder':
+          if (!toolParams.newOrder || toolParams.newOrder.length === 0) {
+            alert('Please select the new order of pages.');
+            setIsProcessing(false);
+            return;
+          }
+          result = await pdfLogic.reorderPages(files[0], toolParams.newOrder);
+          outputName = 'reordered.pdf';
+          break;
+        case 'compress':
+          result = await pdfLogic.compressPDF(files[0], toolParams.compLevel || 'medium');
+          outputName = 'compressed.pdf';
           break;
         case 'viewer':
           const viewerBlob = new Blob([await files[0].arrayBuffer()], { type: 'application/pdf' });
@@ -674,67 +749,85 @@ export default function App() {
           </div>
         );
       case 'split':
+        const splitMode = toolParams.splitMode || 'all';
         return (
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-zinc-400 uppercase">Split Mode</label>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: 'every', label: 'Every Page' },
-                  { id: 'range', label: 'Page Range' },
-                  { id: 'custom', label: 'Custom' }
-                ].map(mode => (
-                  <button
-                    key={mode.id}
-                    onClick={() => setToolParams({ ...toolParams, splitMode: mode.id })}
-                    className={cn(
-                      "py-2 px-1 rounded-lg text-[10px] font-bold border transition-all",
-                      (toolParams.splitMode || 'range') === mode.id 
-                        ? "bg-red-600 border-red-600 text-white" 
-                        : "bg-white border-zinc-200 text-zinc-600"
-                    )}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600 flex items-center gap-1"
+              >
+                Change File
+              </button>
             </div>
+            <div className="flex gap-2 p-1 bg-zinc-100 rounded-xl">
+              {[
+                { id: 'all', label: 'Every Page' },
+                { id: 'range', label: 'Page Range' },
+                { id: 'custom', label: 'Custom' }
+              ].map(mode => (
+                <button
+                  key={mode.id}
+                  onClick={() => setToolParams({ ...toolParams, splitMode: mode.id })}
+                  className={cn(
+                    "flex-1 py-1.5 text-[10px] font-bold rounded-lg transition-all",
+                    splitMode === mode.id ? "bg-white shadow-sm text-zinc-900" : "text-zinc-500"
+                  )}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+
+            {splitMode === 'all' && (
+              <p className="text-[10px] text-zinc-500">Each page becomes its own PDF. You'll download a ZIP containing all pages.</p>
+            )}
             
-            {(toolParams.splitMode || 'range') !== 'every' && (
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-zinc-400 uppercase">
-                  {toolParams.splitMode === 'custom' ? 'Custom Ranges (e.g. 1-2, 5-8)' : 'Page Range (e.g. 1-3)'}
-                </label>
-                <input 
-                  type="text" 
-                  placeholder="1-2" 
-                  className="w-full p-3 bg-white border border-zinc-200 rounded-xl text-sm"
-                  value={toolParams.range || ''}
-                  onChange={(e) => setToolParams({ ...toolParams, range: e.target.value })}
+            {splitMode === 'range' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase">From</label>
+                  <input 
+                    type="number" min="1"
+                    className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                    value={toolParams.rangeFrom || 1}
+                    onChange={(e) => setToolParams({ ...toolParams, rangeFrom: Number(e.target.value) })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase">To</label>
+                  <input 
+                    type="number" min="1"
+                    className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                    value={toolParams.rangeTo || 1}
+                    onChange={(e) => setToolParams({ ...toolParams, rangeTo: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            )}
+
+            {splitMode === 'custom' && (
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Ranges (one per line)</label>
+                <textarea 
+                  placeholder="1-3&#10;4-6" 
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm font-mono"
+                  rows={3}
+                  value={toolParams.customRanges || ''}
+                  onChange={(e) => setToolParams({ ...toolParams, customRanges: e.target.value })}
                 />
               </div>
             )}
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-zinc-400 uppercase">Select Pages</label>
-                <span className="text-[10px] text-zinc-400">Click pages to select</span>
+                <label className="text-xs font-bold text-zinc-400 uppercase">Preview Pages</label>
               </div>
               <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
                 <PDFPageGrid 
                   file={files[0]} 
-                  selectedPages={toolParams.selectedPages || []}
-                  onTogglePage={(index) => {
-                    const selected = [...(toolParams.selectedPages || [])];
-                    const idx = selected.indexOf(index);
-                    if (idx > -1) selected.splice(idx, 1);
-                    else selected.push(index);
-                    
-                    // Update range input based on selection
-                    const sorted = [...selected].sort((a, b) => a - b);
-                    const rangeStr = sorted.map(i => i + 1).join(', ');
-                    setToolParams({ ...toolParams, selectedPages: selected, range: rangeStr });
-                  }}
+                  selectedPages={[]}
                 />
               </div>
             </div>
@@ -806,8 +899,15 @@ export default function App() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-zinc-400 uppercase">Rotate Pages</label>
-              <button 
-                onClick={() => {
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-[10px] font-bold text-red-600"
+                >
+                  Change File
+                </button>
+                <button 
+                  onClick={() => {
                   const newRotations = { ...(toolParams.rotations || {}) };
                   // Rotate all pages by 90
                   files[0].arrayBuffer().then(async bytes => {
@@ -823,7 +923,8 @@ export default function App() {
                 <RotateCw size={14} /> Rotate All
               </button>
             </div>
-            <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
+          </div>
+          <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
               <PDFPageGrid 
                 file={files[0]} 
                 rotations={toolParams.rotations || {}}
@@ -837,23 +938,366 @@ export default function App() {
           </div>
         );
       case 'watermark':
+        const wmStack = toolParams.wmStack || [];
+        const wmType = toolParams.wmType || 'text';
+        
         return (
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-zinc-400 uppercase">Watermark Text</label>
-            <input 
-              type="text" 
-              placeholder="CONFIDENTIAL" 
-              className="w-full p-3 bg-white border border-zinc-200 rounded-xl text-sm"
-              value={toolParams.watermarkText || ''}
-              onChange={(e) => setToolParams({ ...toolParams, watermarkText: e.target.value })}
-            />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Watermark Settings</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            <div className="flex gap-2 p-1 bg-zinc-100 rounded-xl">
+              <button 
+                onClick={() => setToolParams({ ...toolParams, wmType: 'text' })}
+                className={cn(
+                  "flex-1 py-1.5 text-xs font-bold rounded-lg transition-all",
+                  wmType === 'text' ? "bg-white shadow-sm text-zinc-900" : "text-zinc-500"
+                )}
+              >
+                Text
+              </button>
+              <button 
+                onClick={() => setToolParams({ ...toolParams, wmType: 'logo' })}
+                className={cn(
+                  "flex-1 py-1.5 text-xs font-bold rounded-lg transition-all",
+                  wmType === 'logo' ? "bg-white shadow-sm text-zinc-900" : "text-zinc-500"
+                )}
+              >
+                Logo / Image
+              </button>
+            </div>
+
+            {wmType === 'text' ? (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase">Watermark Text</label>
+                  <input 
+                    type="text" 
+                    placeholder="CONFIDENTIAL" 
+                    className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                    value={toolParams.watermarkText || ''}
+                    onChange={(e) => setToolParams({ ...toolParams, watermarkText: e.target.value })}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-zinc-400 uppercase">Font Size</label>
+                    <input 
+                      type="number" 
+                      className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                      value={toolParams.fontSize || 60}
+                      onChange={(e) => setToolParams({ ...toolParams, fontSize: Number(e.target.value) })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-zinc-400 uppercase">Color</label>
+                    <input 
+                      type="color" 
+                      className="w-full h-9 p-1 bg-white border border-zinc-200 rounded-lg cursor-pointer"
+                      value={toolParams.color || '#cc0000'}
+                      onChange={(e) => setToolParams({ ...toolParams, color: e.target.value })}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase flex justify-between">
+                    Angle <span>{toolParams.angle || 45}°</span>
+                  </label>
+                  <input 
+                    type="range" min="-90" max="90"
+                    className="w-full accent-red-600"
+                    value={toolParams.angle || 45}
+                    onChange={(e) => setToolParams({ ...toolParams, angle: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-zinc-400 uppercase">Logo Image</label>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={() => {
+                        const input = document.createElement('input');
+                        input.type = 'file';
+                        input.accept = 'image/*';
+                        input.onchange = async (e) => {
+                          const file = (e.target as HTMLInputElement).files?.[0];
+                          if (file) {
+                            const bytes = await file.arrayBuffer();
+                            setToolParams({ 
+                              ...toolParams, 
+                              logoName: file.name,
+                              logoBytes: bytes,
+                              logoMime: file.type
+                            });
+                          }
+                        };
+                        input.click();
+                      }}
+                      className="flex-1 py-2 px-3 bg-zinc-100 border border-dashed border-zinc-300 rounded-lg text-xs font-medium text-zinc-600 hover:bg-zinc-200 transition-colors"
+                    >
+                      {toolParams.logoName || 'Choose Image...'}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-zinc-400 uppercase">Size</label>
+                    <select 
+                      className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs"
+                      value={toolParams.sizeRatio || 0.25}
+                      onChange={(e) => setToolParams({ ...toolParams, sizeRatio: Number(e.target.value) })}
+                    >
+                      <option value={0.15}>Small (15%)</option>
+                      <option value={0.25}>Medium (25%)</option>
+                      <option value={0.40}>Large (40%)</option>
+                      <option value={0.60}>X-Large (60%)</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-zinc-400 uppercase">Position</label>
+                    <select 
+                      className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs"
+                      value={toolParams.pos || 'center'}
+                      onChange={(e) => setToolParams({ ...toolParams, pos: e.target.value })}
+                    >
+                      <option value="center">Center</option>
+                      <option value="top-left">Top Left</option>
+                      <option value="top-right">Top Right</option>
+                      <option value="bottom-left">Bottom Left</option>
+                      <option value="bottom-right">Bottom Right</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase flex justify-between">
+                Opacity <span>{Math.round((toolParams.opacity || 0.3) * 100)}%</span>
+              </label>
+              <input 
+                type="range" min="0.05" max="1" step="0.05"
+                className="w-full accent-red-600"
+                value={toolParams.opacity || 0.3}
+                onChange={(e) => setToolParams({ ...toolParams, opacity: Number(e.target.value) })}
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">Apply to Pages</label>
+              <div className="flex flex-wrap gap-1">
+                {['all', 'odd', 'even', 'first', 'last'].map(scope => (
+                  <button
+                    key={scope}
+                    onClick={() => setToolParams({ ...toolParams, scope })}
+                    className={cn(
+                      "px-2 py-1 rounded text-[10px] font-bold border capitalize transition-all",
+                      (toolParams.scope || 'all') === scope 
+                        ? "bg-red-600 border-red-600 text-white" 
+                        : "bg-white border-zinc-200 text-zinc-600"
+                    )}
+                  >
+                    {scope}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-zinc-100">
+              <button 
+                onClick={() => {
+                  const newWm = {
+                    type: wmType,
+                    text: toolParams.watermarkText || 'WATERMARK',
+                    fontSize: toolParams.fontSize || 60,
+                    color: toolParams.color || '#cc0000',
+                    opacity: toolParams.opacity || 0.3,
+                    angle: toolParams.angle || 45,
+                    scope: toolParams.scope || 'all',
+                    logoBytes: toolParams.logoBytes,
+                    logoMime: toolParams.logoMime,
+                    logoName: toolParams.logoName,
+                    sizeRatio: toolParams.sizeRatio || 0.25,
+                    pos: toolParams.pos || 'center'
+                  };
+                  setToolParams({ 
+                    ...toolParams, 
+                    wmStack: [...wmStack, newWm],
+                  });
+                }}
+                className="w-full py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 hover:bg-zinc-800 transition-colors"
+              >
+                <Plus size={14} /> Add to Stack
+              </button>
+            </div>
+
+            {wmStack.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Watermark Stack</label>
+                <div className="space-y-1">
+                  {wmStack.map((wm: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between p-2 bg-zinc-50 border border-zinc-100 rounded-lg">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div 
+                          className="w-2 h-2 rounded-full flex-shrink-0" 
+                          style={{ backgroundColor: wm.type === 'text' ? wm.color : '#3b82f6' }}
+                        />
+                        <div className="truncate">
+                          <p className="text-[10px] font-bold text-zinc-900 truncate">
+                            {wm.type === 'text' ? wm.text : wm.logoName}
+                          </p>
+                          <p className="text-[8px] text-zinc-500">
+                            {wm.type === 'text' ? `${wm.fontSize}pt | ${wm.angle}°` : `${Math.round(wm.sizeRatio * 100)}% | ${wm.pos}`}
+                            {' | '}{wm.scope}
+                          </p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          const newStack = [...wmStack];
+                          newStack.splice(i, 1);
+                          setToolParams({ ...toolParams, wmStack: newStack });
+                        }}
+                        className="p-1 text-zinc-400 hover:text-red-500"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      case 'numbers':
+        const pnPos = toolParams.pnPos || 'bottom-center';
+        const pnFormat = toolParams.pnFormat || 'n';
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Page Numbers</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            
+            <div className="space-y-2">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">Position</label>
+              <div className="grid grid-cols-3 gap-1">
+                {[
+                  { id: 'top-left', label: 'Top Left' },
+                  { id: 'top-center', label: 'Top Center' },
+                  { id: 'top-right', label: 'Top Right' },
+                  { id: 'bottom-left', label: 'Bottom Left' },
+                  { id: 'bottom-center', label: 'Bottom Center' },
+                  { id: 'bottom-right', label: 'Bottom Right' }
+                ].map(pos => (
+                  <button
+                    key={pos.id}
+                    onClick={() => setToolParams({ ...toolParams, pnPos: pos.id })}
+                    className={cn(
+                      "py-2 px-1 rounded-lg text-[8px] font-bold border transition-all leading-tight",
+                      pnPos === pos.id ? "bg-red-600 border-red-600 text-white" : "bg-white border-zinc-200 text-zinc-600"
+                    )}
+                  >
+                    {pos.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Format</label>
+                <select 
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-xs"
+                  value={pnFormat}
+                  onChange={(e) => setToolParams({ ...toolParams, pnFormat: e.target.value })}
+                >
+                  <option value="n">1, 2, 3...</option>
+                  <option value="page-n">Page 1, Page 2...</option>
+                  <option value="n-of-total">1 of 10, 2 of 10...</option>
+                  <option value="page-n-of-total">Page 1 of 10...</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Start Number</label>
+                <input 
+                  type="number" min="0"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                  value={toolParams.pnStart || 1}
+                  onChange={(e) => setToolParams({ ...toolParams, pnStart: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Font Size</label>
+                <input 
+                  type="number" min="6" max="36"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                  value={toolParams.pnFontSize || 11}
+                  onChange={(e) => setToolParams({ ...toolParams, pnFontSize: Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Margin</label>
+                <input 
+                  type="number" min="4" max="72"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                  value={toolParams.pnMargin || 20}
+                  onChange={(e) => setToolParams({ ...toolParams, pnMargin: Number(e.target.value) })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Skip First N</label>
+                <input 
+                  type="number" min="0"
+                  className="w-full p-2 bg-white border border-zinc-200 rounded-lg text-sm"
+                  value={toolParams.pnSkip || 0}
+                  onChange={(e) => setToolParams({ ...toolParams, pnSkip: Number(e.target.value) })}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-zinc-400 uppercase">Color</label>
+                <input 
+                  type="color" 
+                  className="w-full h-9 p-1 bg-white border border-zinc-200 rounded-lg cursor-pointer"
+                  value={toolParams.pnColor || '#333333'}
+                  onChange={(e) => setToolParams({ ...toolParams, pnColor: e.target.value })}
+                />
+              </div>
+            </div>
           </div>
         );
       case 'delete':
         return (
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-zinc-400 uppercase">Pages to Delete</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            <div className="space-y-2">
               <input 
                 type="text" 
                 placeholder="2, 4" 
@@ -889,8 +1333,16 @@ export default function App() {
       case 'extract':
         return (
           <div className="space-y-4">
-            <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-zinc-400 uppercase">Pages to Extract</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            <div className="space-y-2">
               <input 
                 type="text" 
                 placeholder="1, 3, 5" 
@@ -923,9 +1375,127 @@ export default function App() {
             </div>
           </div>
         );
+      case 'reorder':
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">New Page Order</label>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-[10px] font-bold text-red-600"
+                >
+                  Change File
+                </button>
+                <button 
+                  onClick={() => setToolParams({ ...toolParams, newOrder: [] })}
+                  className="text-[10px] font-bold text-zinc-400"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+            <div className="p-3 bg-zinc-50 border border-zinc-100 rounded-xl">
+              <p className="text-[10px] text-zinc-500 mb-2">Click pages in the order you want them to appear.</p>
+              <div className="flex flex-wrap gap-1">
+                {(toolParams.newOrder || []).map((idx: number, i: number) => (
+                  <div key={i} className="px-2 py-1 bg-zinc-900 text-white text-[10px] font-bold rounded">
+                    {idx + 1}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="max-h-80 overflow-y-auto p-2 bg-zinc-100 rounded-none">
+              <PDFPageGrid 
+                file={files[0]} 
+                columns={4}
+                selectedPages={toolParams.newOrder || []}
+                onTogglePage={(index) => {
+                  const order = [...(toolParams.newOrder || [])];
+                  const idxInOrder = order.indexOf(index);
+                  if (idxInOrder > -1) {
+                    order.splice(idxInOrder, 1);
+                  } else {
+                    order.push(index);
+                  }
+                  setToolParams({ ...toolParams, newOrder: order });
+                }}
+              />
+            </div>
+          </div>
+        );
+      case 'compress':
+        const compLevel = toolParams.compLevel || 'medium';
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Compression</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase">Compression Level</label>
+              <div className="grid grid-cols-1 gap-2">
+                {[
+                  { id: 'low', label: 'Low', desc: 'Maximum quality, minimal reduction.', icon: '🔵' },
+                  { id: 'medium', label: 'Medium', desc: 'Good balance of quality and size.', icon: '🟢', recommended: true },
+                  { id: 'high', label: 'High', desc: 'Smallest file size. May affect quality.', icon: '🟠' }
+                ].map(level => (
+                  <button
+                    key={level.id}
+                    onClick={() => setToolParams({ ...toolParams, compLevel: level.id })}
+                    className={cn(
+                      "flex items-center gap-3 p-3 rounded-xl border text-left transition-all",
+                      compLevel === level.id ? "bg-red-50 border-red-200" : "bg-white border-zinc-100 hover:border-zinc-200"
+                    )}
+                  >
+                    <span className="text-xl">{level.icon}</span>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={cn("text-xs font-bold", compLevel === level.id ? "text-red-900" : "text-zinc-900")}>
+                          {level.label}
+                        </span>
+                        {level.recommended && (
+                          <span className="px-1.5 py-0.5 bg-red-600 text-white text-[8px] font-bold rounded uppercase">Recommended</span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-zinc-500 leading-tight">{level.desc}</p>
+                    </div>
+                    <div className={cn(
+                      "w-4 h-4 rounded-full border-2 flex items-center justify-center",
+                      compLevel === level.id ? "border-red-600" : "border-zinc-200"
+                    )}>
+                      {compLevel === level.id && <div className="w-2 h-2 bg-red-600 rounded-full" />}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4 bg-zinc-50 border border-zinc-100 rounded-xl text-center">
+              <Zap className="mx-auto mb-2 text-orange-600" size={24} />
+              <p className="text-sm font-bold text-zinc-900">Ready to compress</p>
+              <p className="text-xs text-zinc-500">We will optimize your PDF structure locally.</p>
+            </div>
+          </div>
+        );
       case 'metadata':
         return (
           <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Edit Metadata</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
             <div className="space-y-2">
               <label className="text-xs font-bold text-zinc-400 uppercase">Title</label>
               <input 
@@ -949,24 +1519,54 @@ export default function App() {
       case 'lock':
       case 'unlock':
         return (
-          <div className="p-4 bg-amber-50 border border-amber-100 rounded-xl text-center space-y-2">
-            <Lock size={24} className="text-amber-500 mx-auto" />
-            <p className="text-sm text-amber-900 font-bold">Advanced Encryption Coming Soon</p>
-            <p className="text-xs text-amber-700">We are working on adding secure AES-256 encryption to this offline tool.</p>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Security</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            <div className="p-4 bg-amber-50 border border-amber-100 rounded-xl text-center space-y-2">
+              <Lock size={24} className="text-amber-500 mx-auto" />
+              <p className="text-sm text-amber-900 font-bold">Advanced Encryption Coming Soon</p>
+              <p className="text-xs text-amber-700">We are working on adding secure AES-256 encryption to this offline tool.</p>
+            </div>
           </div>
         );
       case 'fill':
         return (
-          <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl text-center space-y-2">
-            <FilePlus size={24} className="text-blue-500 mx-auto" />
-            <p className="text-sm text-blue-900 font-bold">Form Filling Coming Soon</p>
-            <p className="text-xs text-blue-700">Interactive form filling is being developed for the next release.</p>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Form Filler</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
+            <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl text-center space-y-2">
+              <FilePlus size={24} className="text-blue-500 mx-auto" />
+              <p className="text-sm text-blue-900 font-bold">Form Filling Coming Soon</p>
+              <p className="text-xs text-blue-700">Interactive form filling is being developed for the next release.</p>
+            </div>
           </div>
         );
       case 'sign':
         return (
-          <div className="space-y-2">
-            <label className="text-xs font-bold text-zinc-400 uppercase">Draw your signature</label>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-zinc-400 uppercase">Draw your signature</label>
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="text-[10px] font-bold text-red-600"
+              >
+                Change File
+              </button>
+            </div>
             <SignatureCanvas onSave={(data) => setToolParams({ ...toolParams, signature: data })} />
             {toolParams.signature && (
               <div className="p-2 bg-emerald-50 rounded-lg border border-emerald-100 flex items-center gap-2">
